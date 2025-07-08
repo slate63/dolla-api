@@ -1,53 +1,49 @@
-from fastapi import FastAPI, Query, UploadFile, File
-from typing import List, Optional
+from fastapi import FastAPI, Query
+from typing import Optional
 import pandas as pd
-import pyarrow.parquet as pq
-import os
 from pathlib import Path
-from io import BytesIO
 
 app = FastAPI(title="Dividend Scanner API")
+
+DATA_DIR = Path("/data")
+REQUIRED_COLUMNS = ['timestamp', 'symbol', 'dividends']
 
 def has_required_columns_df(df, required_columns):
     return all(col in df.columns for col in required_columns)
 
-@app.post("/scan-dividends")
+@app.get("/scan-dividends")
 async def scan_dividends(
-    ticker: Optional[str] = Query(None, description="Optional ticker filter"),
-    show_all: Optional[bool] = Query(False, description="Show all results"),
-    files: List[UploadFile] = File(...)
+    ticker: Optional[str] = Query(None, description="Optional ticker filter")
 ):
-    required_cols = ['timestamp', 'symbol', 'dividends']
     results = []
     total_dividends = 0
     files_with_dividends = 0
 
-    for upload_file in files:
+    if not DATA_DIR.exists():
+        return {"error": f"Data directory not found: {DATA_DIR}"}
+
+    files = list(DATA_DIR.glob("*.parquet"))
+    for file_path in files:
         try:
-            # Read parquet file from upload
-            contents = await upload_file.read()
-            df = pd.read_parquet(BytesIO(contents), columns=None)
-            
-            if not has_required_columns_df(df, required_cols):
+            df = pd.read_parquet(file_path)
+            if not has_required_columns_df(df, REQUIRED_COLUMNS):
                 continue
-            
-            df = df[required_cols]
+
+            df = df[REQUIRED_COLUMNS]
             if ticker:
                 df = df[df['symbol'] == ticker.upper()]
-            df = df[df['dividends'] != 0]
+            df = df[df['dividends'] != 0].copy()
             if not df.empty:
-                df.loc[:, 'file'] = upload_file.filename
+                df['file'] = file_path.name
                 results.append(df)
                 total_dividends += len(df)
                 files_with_dividends += 1
         except Exception as e:
-            return {"error": f"Failed to process {upload_file.filename}: {str(e)}"}
+            continue
 
     if results:
         final_df = pd.concat(results, ignore_index=True)
         final_df = final_df[['timestamp', 'symbol', 'dividends', 'file']]
-        if not show_all and len(final_df) > 20:
-            final_df = final_df.head(20)
         return {
             "files_scanned": len(files),
             "files_with_dividends": files_with_dividends,
