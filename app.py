@@ -4,11 +4,10 @@ import pandas as pd
 from pathlib import Path
 import logging
 import time
-from datetime import datetime
 
-app = FastAPI(title="Dividend Scanner API")
+app = FastAPI(title="Dividend & Stock Split Scanner API")
 
-# Set up logging
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s'
@@ -16,7 +15,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("/data")
-REQUIRED_COLUMNS = ['timestamp', 'symbol', 'dividends']
+ALL_COLUMNS = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'dividends', 'stock splits']
+DIVIDEND_COLS = ['timestamp', 'symbol', 'dividends']
+SPLIT_COLS = ['timestamp', 'symbol', 'stock splits']
 
 def has_required_columns_df(df, required_columns):
     return all(col in df.columns for col in required_columns)
@@ -26,11 +27,55 @@ async def scan_dividends(
     request: Request,
     ticker: Optional[str] = Query(None, description="Optional ticker filter")
 ):
-    start_time = time.time()
+    return await scan_generic(
+        request=request,
+        ticker=ticker,
+        required_columns=DIVIDEND_COLS,
+        value_column='dividends',
+        endpoint_label='DIVIDEND_SCAN',
+        full_data=False
+    )
 
+@app.get("/scan-splits")
+async def scan_splits(
+    request: Request,
+    ticker: Optional[str] = Query(None, description="Optional ticker filter")
+):
+    return await scan_generic(
+        request=request,
+        ticker=ticker,
+        required_columns=SPLIT_COLS,
+        value_column='stock splits',
+        endpoint_label='SPLIT_SCAN',
+        full_data=False
+    )
+
+@app.get("/scan-splits-full")
+async def scan_splits_full(
+    request: Request,
+    ticker: Optional[str] = Query(None, description="Optional ticker filter")
+):
+    return await scan_generic(
+        request=request,
+        ticker=ticker,
+        required_columns=SPLIT_COLS,
+        value_column='stock splits',
+        endpoint_label='SPLIT_FULL_SCAN',
+        full_data=True
+    )
+
+async def scan_generic(
+    request: Request,
+    ticker: Optional[str],
+    required_columns,
+    value_column: str,
+    endpoint_label: str,
+    full_data: bool
+):
+    start_time = time.time()
     results = []
-    total_dividends = 0
-    files_with_dividends = 0
+    total_found = 0
+    files_with_data = 0
 
     if not DATA_DIR.exists():
         logger.error(f"Data directory not found: {DATA_DIR}")
@@ -41,46 +86,45 @@ async def scan_dividends(
     for file_path in files:
         try:
             df = pd.read_parquet(file_path)
-            if not has_required_columns_df(df, REQUIRED_COLUMNS):
+            if not has_required_columns_df(df, required_columns):
                 continue
 
-            df = df[REQUIRED_COLUMNS]
+            df = df[ALL_COLUMNS if full_data else required_columns]
             if ticker:
                 df = df[df['symbol'].str.upper() == ticker.upper()]
-            df = df[df['dividends'] != 0].copy()
+            df = df[df[value_column] != 0].copy()
             if not df.empty:
                 df['file'] = file_path.name
                 results.append(df)
-                total_dividends += len(df)
-                files_with_dividends += 1
+                total_found += len(df)
+                files_with_data += 1
         except Exception as e:
             logger.error(f"Error reading {file_path.name}: {e}")
             continue
 
     duration = round(time.time() - start_time, 2)
 
-    # Log everything in a single structured line
+    # One-line log
     logger.info(
-        f"DIVIDEND_SCAN | ticker={ticker or 'ALL'} | files_scanned={len(files)} | "
-        f"files_with_dividends={files_with_dividends} | total_dividends={total_dividends} | "
+        f"{endpoint_label} | ticker={ticker or 'ALL'} | files_scanned={len(files)} | "
+        f"files_with_data={files_with_data} | total_{value_column.replace(' ', '_')}={total_found} | "
         f"duration_sec={duration} | ip={request.client.host}"
     )
 
     if results:
         final_df = pd.concat(results, ignore_index=True)
-        final_df = final_df[['timestamp', 'symbol', 'dividends', 'file']]
         return {
             "files_scanned": len(files),
-            "files_with_dividends": files_with_dividends,
-            "total_dividends_found": total_dividends,
+            "files_with_data": files_with_data,
+            f"total_{value_column.replace(' ', '_')}": total_found,
             "elapsed_seconds": duration,
-            "dividends": final_df.to_dict(orient="records")
+            "results": final_df.to_dict(orient="records")
         }
     else:
         return {
             "files_scanned": len(files),
-            "files_with_dividends": 0,
-            "total_dividends_found": 0,
+            "files_with_data": 0,
+            f"total_{value_column.replace(' ', '_')}": 0,
             "elapsed_seconds": duration,
-            "dividends": []
+            "results": []
         }
