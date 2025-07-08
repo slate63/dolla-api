@@ -2,4 +2,4 @@ fastapi
 uvicorn[standard]
 pandas
 pyarrow
-tqdm
+python-multipart
