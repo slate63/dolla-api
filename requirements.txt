@@ -1,5 +1,5 @@
-yfinance
+fastapi
+uvicorn[standard]
 pandas
 pyarrow
-requests
 tqdm
