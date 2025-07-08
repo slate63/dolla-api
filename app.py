@@ -142,20 +142,25 @@ async def scan_generic(
         f"duration_sec={duration} | ip={request.client.host}"
     )
 
+    # Build response
     if results:
         final_df = pd.concat(results, ignore_index=True)
-        return {
+        response = {
             "files_scanned": len(files),
             "files_with_data": files_with_data,
-            f"total_{value_column.replace(' ', '_')}": total_found,
             "elapsed_seconds": duration,
             "results": final_df.to_dict(orient="records")
         }
+        if not full_data:
+            response[f"total_{value_column.replace(' ', '_')}"] = total_found
+        return response
     else:
-        return {
+        response = {
             "files_scanned": len(files),
             "files_with_data": 0,
-            f"total_{value_column.replace(' ', '_')}": 0,
             "elapsed_seconds": duration,
             "results": []
         }
+        if not full_data:
+            response[f"total_{value_column.replace(' ', '_')}"] = 0
+        return response
