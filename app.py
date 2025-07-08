@@ -50,17 +50,17 @@ async def scan_splits(
         full_data=False
     )
 
-@app.get("/scan-splits-full")
-async def scan_splits_full(
+@app.get("/scan-full")
+async def scan_full(
     request: Request,
     ticker: Optional[str] = Query(None, description="Optional ticker filter")
 ):
     return await scan_generic(
         request=request,
         ticker=ticker,
-        required_columns=SPLIT_COLS,
-        value_column='stock splits',
-        endpoint_label='SPLIT_FULL_SCAN',
+        required_columns=ALL_COLUMNS,
+        value_column='dividends',  # Used just for summary logging
+        endpoint_label='FULL_SCAN',
         full_data=True
     )
 
@@ -92,7 +92,8 @@ async def scan_generic(
             df = df[ALL_COLUMNS if full_data else required_columns]
             if ticker:
                 df = df[df['symbol'].str.upper() == ticker.upper()]
-            df = df[df[value_column] != 0].copy()
+            if value_column in df.columns:
+                df = df[df[value_column] != 0].copy()
             if not df.empty:
                 df['file'] = file_path.name
                 results.append(df)
