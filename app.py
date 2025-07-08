@@ -9,7 +9,7 @@ import asyncio
 
 app = FastAPI(title="Dividend & Stock Split Scanner API")
 
-# CORS Middleware (optional for browser-based requests)
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,11 +30,9 @@ ALL_COLUMNS = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 
 DIVIDEND_COLS = ['timestamp', 'symbol', 'dividends']
 SPLIT_COLS = ['timestamp', 'symbol', 'stock splits']
 
-# Utility function
 def has_required_columns_df(df, required_columns):
     return all(col in df.columns for col in required_columns)
 
-# Root endpoint
 @app.get("/")
 def root():
     return {
@@ -84,26 +82,27 @@ async def scan_full(
         request=request,
         ticker=ticker,
         required_columns=ALL_COLUMNS,
-        value_column='dividends',  # still used for logging only
+        value_column=None,  # Not used for filtering or logging
         endpoint_label='FULL_SCAN',
         full_data=True,
         filename_contains=filename_contains
     )
 
-# Main logic
 async def scan_generic(
     request: Request,
     ticker: Optional[str],
     required_columns,
-    value_column: str,
+    value_column: Optional[str],
     endpoint_label: str,
     full_data: bool,
     filename_contains: Optional[str]
 ):
     start_time = time.time()
     results = []
-    total_found = 0
+    total_dividends = 0
+    total_stock_splits = 0
     files_with_data = 0
+    files_with_errors = 0
 
     if not DATA_DIR.exists():
         logger.error(f"Data directory not found: {DATA_DIR}")
@@ -112,6 +111,17 @@ async def scan_generic(
     files = list(DATA_DIR.glob("*.parquet"))
     if filename_contains:
         files = [f for f in files if filename_contains.lower() in f.name.lower()]
+
+    if not files:
+        duration = round(time.time() - start_time, 2)
+        return {
+            "files_scanned": 0,
+            "files_with_data": 0,
+            "files_with_errors": 0,
+            "elapsed_seconds": duration,
+            "results": [],
+            "message": "No files matched the given filters."
+        }
 
     for file_path in files:
         try:
@@ -122,45 +132,50 @@ async def scan_generic(
             df = df[ALL_COLUMNS if full_data else required_columns]
             if ticker:
                 df = df[df['symbol'].str.upper() == ticker.upper()]
-            if not full_data and value_column in df.columns:
-                df = df[df[value_column] != 0].copy()
+            if not full_data:
+                if value_column in df.columns:
+                    df = df[df[value_column] != 0].copy()
+                    if value_column == 'dividends':
+                        total_dividends += len(df)
+                    elif value_column == 'stock splits':
+                        total_stock_splits += len(df)
+
             if not df.empty:
                 df['file'] = file_path.name
                 results.append(df)
-                total_found += len(df)
                 files_with_data += 1
+
         except Exception as e:
             logger.error(f"Error reading {file_path.name}: {e}")
+            files_with_errors += 1
             continue
 
     duration = round(time.time() - start_time, 2)
 
-    # One-line log
-    logger.info(
+    # Log
+    logger_line = (
         f"{endpoint_label} | ticker={ticker or 'ALL'} | files_scanned={len(files)} | "
-        f"files_with_data={files_with_data} | total_{value_column.replace(' ', '_')}={total_found} | "
+        f"files_with_data={files_with_data} | files_with_errors={files_with_errors} | "
         f"duration_sec={duration} | ip={request.client.host}"
     )
+    if not full_data and value_column == 'dividends':
+        logger_line += f" | total_dividends={total_dividends}"
+    elif not full_data and value_column == 'stock splits':
+        logger_line += f" | total_stock_splits={total_stock_splits}"
+    logger.info(logger_line)
 
-    # Build response
-    if results:
-        final_df = pd.concat(results, ignore_index=True)
-        response = {
-            "files_scanned": len(files),
-            "files_with_data": files_with_data,
-            "elapsed_seconds": duration,
-            "results": final_df.to_dict(orient="records")
-        }
-        if not full_data:
-            response[f"total_{value_column.replace(' ', '_')}"] = total_found
-        return response
-    else:
-        response = {
-            "files_scanned": len(files),
-            "files_with_data": 0,
-            "elapsed_seconds": duration,
-            "results": []
-        }
-        if not full_data:
-            response[f"total_{value_column.replace(' ', '_')}"] = 0
-        return response
+    response = {
+        "files_scanned": len(files),
+        "files_with_data": files_with_data,
+        "files_with_errors": files_with_errors,
+        "elapsed_seconds": duration,
+        "results": pd.concat(results, ignore_index=True).to_dict(orient="records") if results else []
+    }
+
+    if not full_data:
+        if value_column == 'dividends':
+            response["total_dividends"] = total_dividends
+        elif value_column == 'stock splits':
+            response["total_stock_splits"] = total_stock_splits
+
+    return response
