@@ -1,14 +1,18 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from typing import Optional
 import pandas as pd
 from pathlib import Path
 import logging
 import time
+from datetime import datetime
 
 app = FastAPI(title="Dividend Scanner API")
 
-# Set up basic logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("/data")
@@ -19,6 +23,7 @@ def has_required_columns_df(df, required_columns):
 
 @app.get("/scan-dividends")
 async def scan_dividends(
+    request: Request,
     ticker: Optional[str] = Query(None, description="Optional ticker filter")
 ):
     start_time = time.time()
@@ -32,13 +37,11 @@ async def scan_dividends(
         return {"error": f"Data directory not found: {DATA_DIR}"}
 
     files = list(DATA_DIR.glob("*.parquet"))
-    logger.info(f"Scanning {len(files)} files...")
 
     for file_path in files:
         try:
             df = pd.read_parquet(file_path)
             if not has_required_columns_df(df, REQUIRED_COLUMNS):
-                logger.warning(f"Missing required columns in {file_path.name}")
                 continue
 
             df = df[REQUIRED_COLUMNS]
@@ -54,10 +57,13 @@ async def scan_dividends(
             logger.error(f"Error reading {file_path.name}: {e}")
             continue
 
-    duration = time.time() - start_time
+    duration = round(time.time() - start_time, 2)
+
+    # Log everything in a single structured line
     logger.info(
-        f"Scan complete: {len(files)} files scanned, {files_with_dividends} with dividends, "
-        f"{total_dividends} dividends found. Took {duration:.2f} seconds."
+        f"DIVIDEND_SCAN | ticker={ticker or 'ALL'} | files_scanned={len(files)} | "
+        f"files_with_dividends={files_with_dividends} | total_dividends={total_dividends} | "
+        f"duration_sec={duration} | ip={request.client.host}"
     )
 
     if results:
@@ -67,7 +73,7 @@ async def scan_dividends(
             "files_scanned": len(files),
             "files_with_dividends": files_with_dividends,
             "total_dividends_found": total_dividends,
-            "elapsed_seconds": round(duration, 2),
+            "elapsed_seconds": duration,
             "dividends": final_df.to_dict(orient="records")
         }
     else:
@@ -75,6 +81,6 @@ async def scan_dividends(
             "files_scanned": len(files),
             "files_with_dividends": 0,
             "total_dividends_found": 0,
-            "elapsed_seconds": round(duration, 2),
+            "elapsed_seconds": duration,
             "dividends": []
         }
