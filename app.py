@@ -30,8 +30,19 @@ ALL_COLUMNS = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume', 
 DIVIDEND_COLS = ['timestamp', 'symbol', 'dividends']
 SPLIT_COLS = ['timestamp', 'symbol', 'stock splits']
 
+SMA_PERIODS = [5, 20, 50, 100, 200]
+EMA_PERIODS = [50, 100, 200]
+
 def has_required_columns_df(df, required_columns):
     return all(col in df.columns for col in required_columns)
+
+def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.sort_values("timestamp")
+    for period in SMA_PERIODS:
+        df[f"sma_{period}"] = df['close'].rolling(window=period).mean()
+    for period in EMA_PERIODS:
+        df[f"ema_{period}"] = df['close'].ewm(span=period, adjust=False).mean()
+    return df
 
 @app.get("/")
 def root():
@@ -82,7 +93,7 @@ async def scan_full(
         request=request,
         ticker=ticker,
         required_columns=ALL_COLUMNS,
-        value_column=None,  # Not used for filtering or logging
+        value_column=None,
         endpoint_label='FULL_SCAN',
         full_data=True,
         filename_contains=filename_contains
@@ -139,6 +150,8 @@ async def scan_generic(
                         total_dividends += len(df)
                     elif value_column == 'stock splits':
                         total_stock_splits += len(df)
+            if full_data and not df.empty:
+                df = add_technical_indicators(df)
 
             if not df.empty:
                 df['file'] = file_path.name
